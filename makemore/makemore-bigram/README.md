@@ -1,4 +1,4 @@
-# makemore
+# makemore-bigram
 
 Character-level language models following Karpathy's makemore series.
 
