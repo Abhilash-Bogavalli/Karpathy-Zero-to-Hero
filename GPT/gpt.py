@@ -2,29 +2,32 @@ import torch
 import torch.nn as nn 
 from torch.nn import functional as F
 
-batch_size = 32
-block_size = 8
-max_iters = 5000
-eval_interval = 300
-learning_rate = 1e-3
+batch_size = 64
+block_size = 16
+max_iters = 10000
+eval_interval = 500
+learning_rate = 3e-4
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 eval_iters = 200
-n_embd = 32
+n_embd = 36
+n_head = 6
+n_layer = 6
+dropout = 0.2
 #------
 torch.manual_seed(1337)
 
 with open("/Users/abhilashbogavalli/Desktop/AI/AI/Andrej/Karpathy-Zero-to-Hero/GPT/input.txt",'r',encoding='utf-8') as f:
     text = f.read()
 
-chars = sorted(list(set(text)))
-num_of_unique_chars = len(chars)
+chars = sorted(list(set(text))) # all our possible characters
+num_of_unique_chars = len(chars) # total number of characters
 vocab_size = num_of_unique_chars
 
-stoi = {s:i for i,s in enumerate(chars)}
-itos = {i:s for i,s in enumerate(chars)}
+stoi = {s:i for i,s in enumerate(chars)} # characters to indexing
+itos = {i:s for i,s in enumerate(chars)} # index to character
 
-encode = lambda s: [stoi[c] for c in s]
-decode = lambda c: "".join([itos[s] for s in c])
+encode = lambda s: [stoi[c] for c in s] 
+decode = lambda c: "".join([itos[s] for s in c]) 
 
 
 data = torch.tensor(encode(text),dtype =  torch.long)
@@ -35,14 +38,14 @@ val_data = data[n:]
 def get_batch(split):
     data = {"train":train_data,
      "val":val_data}[split]
-    ix = torch.randint(len(data)-block_size,(batch_size,))
-    x = torch.stack([data[i:i+block_size] for i in ix])
+    ix = torch.randint(len(data)-block_size,(batch_size,)) # get batch_size number of random number in range of len(data)
+    x = torch.stack([data[i:i+block_size] for i in ix]) # get block_size length of continous inputs based on index 
     y = torch.stack([data[i+1:block_size+i+1] for i in ix])
     x,y = x.to(device),y.to(device)
     return x,y 
 
 @torch.no_grad()
-def estimate_loss():
+def estimate_loss(): # To get the mean loss over various iteration to get the better approximate of loss during training 
     out = {}
     model.eval()
     for split in ['train','val']:
@@ -61,37 +64,41 @@ class Head(nn.Module):
         self.key = nn.Linear(n_embd,head_size,bias= False) 
         self.query = nn.Linear(n_embd,head_size,bias= False)
         self.value = nn.Linear(n_embd,head_size,bias= False)
-        self.register_buffer('tril',torch.tril(torch.ones(block_size,block_size)))
+        self.register_buffer('tril',torch.tril(torch.ones(block_size,block_size))) # to store tensors that are part of our model but not for the optimizer to optimize
 
+        self.dropout = nn.Dropout(dropout)
     def forward(self,x):
         B,T,C = x.shape
         k = self.key(x) # x would B,block_size,n_embd and k,q,v would be B,block_size,head_size
         q = self.query(x)
-        wei = q @ k.transpose(-2,-1) * C ** -0.5 #B,block_size,block_size 
-        wei = wei.masked_fill(self.tril[:T,:T] == 0,float('-inf'))
-        wei = F.softmax(wei,dim = -1)
-        v = self.value(x)
-        out = wei @ v # B, block_size, head_size
+        wei = q @ k.transpose(-2,-1) * C ** -0.5 #B,block_size,block_size - B,T,T not block size all the time , to get connections between each position
+        wei = wei.masked_fill(self.tril[:T,:T] == 0,float('-inf')) # to make the upper triangular parts -inf
+        wei = F.softmax(wei,dim = -1) # during softmax the -inf ones give zero contribution 
+        wei = self.dropout(wei) # 20% zeroing out for improving generalization and to prevent overfitting 
+        v = self.value(x) # B , T, head_size 
+        out = wei @ v # B, block_size, head_size 
         return out 
 class MultiHead(nn.Module):
 
     def __init__(self,num_heads,head_size):
         super().__init__()
-        self.heads = nn.ModuleList([Head(head_size) for _ in range(num_heads)])
-        self.proj = nn.Linear(n_embd,n_embd)
-
+        self.heads = nn.ModuleList([Head(head_size) for _ in range(num_heads)]) # list of heads 
+        self.proj = nn.Linear(n_embd,n_embd) # to make an interaction between heads and also bring back the dimensionality 
+        self.dropout = nn.Dropout(dropout)
     def forward(self,x):
         out = torch.cat([h(x) for h in self.heads],dim = -1)
         out = self.proj(out)
+        out = self.dropout(out)
         return out 
     
-class FeedForward(nn.Module):
+class FeedForward(nn.Module): # after heads for better learning from the self attention 
     def __init__(self,n_embd):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Linear(n_embd,4*n_embd),
-            nn.ReLU(),
-            nn.Linear(4*n_embd,n_embd)
+            nn.Linear(n_embd,4*n_embd), # expand the possibilities
+            nn.ReLU(), 
+            nn.Linear(4*n_embd,n_embd), # bring back the dim 
+            nn.Dropout(dropout),
         )
     def forward(self,x):
         return self.net(x)
@@ -103,11 +110,11 @@ class Block(nn.Module):
         head_size = n_embd // n_head
         self.sa = MultiHead(n_head,head_size)
         self.ffwd = FeedForward(n_embd)
-        self.ln1 = nn.LayerNorm(n_embd)
+        self.ln1 = nn.LayerNorm(n_embd) # to normalize before sending in to heads and feeds forwards 
         self.ln2 = nn.LayerNorm(n_embd)
 
     def forward(self,x):
-        x = x + self.sa(self.ln1(x))
+        x = x + self.sa(self.ln1(x)) # x + part for residual nets 
         x = x+ self.ffwd(self.ln2(x))
         return x
 
@@ -117,20 +124,17 @@ class BigramLanguageModel(nn.Module):
         super().__init__()
         self.token_embedding_table = nn.Embedding(vocab_size,n_embd)
         self.position_embedding_table = nn.Embedding(block_size,n_embd)
-        self.blocks = nn.Sequential(
-            Block(n_embd, n_head = 4),
-            Block(n_embd, n_head = 4),
-            Block(n_embd, n_head = 4),
-            nn.LayerNorm(n_embd),
-        )
+        self.blocks = nn.Sequential(*[Block(n_embd,n_head=n_head) for _ in range(n_layer)])
+        self.ln_f = nn.LayerNorm(n_embd)
         self.lm_head = nn.Linear(n_embd,vocab_size)
 
     def forward(self,idx,targets = None):
-        B,T = idx.shape
+        B,T = idx.shape 
         tok_emb = self.token_embedding_table(idx) #(B,T,C)
         pos_emb = self.position_embedding_table(torch.arange(T,device=device))
         x = tok_emb + pos_emb
         x = self.blocks(x)
+        x = self.ln_f(x)
         logits = self.lm_head(x)
 
         if targets == None:
