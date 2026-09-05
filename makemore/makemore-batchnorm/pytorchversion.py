@@ -2,11 +2,11 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 import random
-context_length = 3
-n_embd = 16
-n_hidden = 500
+context_length = 4
+n_embd = 20
+n_hidden = 700
 batch_size = 32
-num_epochs = 15
+num_epochs = 30
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 words = open('/Users/abhilashbogavalli/Desktop/AI/AI/Andrej/Karpathy-Zero-to-Hero/makemore/makemore-batchnorm/names.txt', 'r').read().splitlines()
 
@@ -59,6 +59,7 @@ class OurMlp(nn.Module):
         self.ly1 = nn.Linear(n_embd*context_length,n_hidden)
         self.batchlayer = nn.BatchNorm1d(n_hidden)
         self.tanh = nn.Tanh()
+        self.dropout = nn.Dropout(0.1)
         self.ly2 = nn.Linear(n_hidden,vocab_size)
     
     def forward(self,x):
@@ -67,6 +68,7 @@ class OurMlp(nn.Module):
         batch_logits = self.ly1(x)
         normalized_guys = self.batchlayer(batch_logits)
         almost_logits = self.tanh(normalized_guys)
+        almost_logits = self.dropout(almost_logits)
         logits = self.ly2(almost_logits)
 
         return logits 
@@ -81,7 +83,7 @@ model = OurMlp(vocab_size, n_embd, context_length, n_hidden).to(device)
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=0.001)
 
-scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.1)
+scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.1)
 
 @torch.no_grad()
 def evaluate(loader):
@@ -110,7 +112,7 @@ for epoch in range(num_epochs):
         logits = model(xb)
         loss = F.cross_entropy(logits, yb)
 
-        optimizer.zero_grad()
+        optimizer.zero_grad(set_to_none=True)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
@@ -123,8 +125,6 @@ for epoch in range(num_epochs):
     val_loss = evaluate(val_loader)
     print(f"epoch {epoch}: train {train_loss:.4f} | val {val_loss:.4f}")
     
-model.eval()
-xb = [0,0,0]
 model.eval()
 for _ in range(10):
     context = [0] * context_length
