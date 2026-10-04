@@ -117,7 +117,7 @@ class Block(nn.Module):
         x = x + self.sa(self.ln1(x)) # x + part for residual nets 
         x = x+ self.ffwd(self.ln2(x))
         return x
-
+    
 class BigramLanguageModel(nn.Module):
     
     def __init__(self):
